@@ -1,0 +1,11 @@
+Based on RC4 CIPHER
+
+
+functions
+
+rc4init(key)
+
+rc4encrypt(text)
+
+rc4uninit()
+
