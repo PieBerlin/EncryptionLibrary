@@ -430,3 +430,172 @@ export int8 *rc4encrypt(Arcfour *p,int8 *cleartext,int16 size){
 2. **Whitewashing:** Extensive (500M bytes) for security but impacts performance
 3. **Byte Operations:** All operations on 8-bit values with modulo 256 arithmetic
 4. **State Isolation:** Each encryption session requires fresh initialization with key
+
+# Detailed Explanation of First Two Functions in arcfour.c
+
+## Function 1: `export Arcfour *rc4init(int8 *key, int16 size)`
+
+### **What This Function Does:**
+This function **initializes the RC4 cipher state** (also called the "context" or "session") using a provided encryption key. It sets up the internal state (S-box) that will be used to generate the pseudorandom keystream for encryption/decryption.
+
+### **Input Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `key` | `int8 *` | Pointer to the encryption key (array of bytes) |
+| `size` | `int16` | Length of the key in bytes (max 65,535) |
+
+### **What Happens Inside (Step by Step):**
+
+1. **Memory Allocation**: Allocates memory for the RC4 state structure
+2. **Initialization**: Sets all S-box values to 0, resets counters (i, j, k) to 0
+3. **Identity Permutation**: Fills S-box with values 0, 1, 2, ..., 255 (in order)
+4. **Key Scheduling Algorithm (KSA)**: Shuffles the S-box based on the key
+   - For each position i from 0 to 255:
+     - Calculates: `j = (j + S[i] + key[i % keylength]) % 256`
+     - Swaps S[i] and S[j]
+5. **Reset Counters**: Sets i and j back to 0 after KSA
+6. **Whitewashing**: Generates and discards 500 million keystream bytes
+   - This is a security measure to avoid biases in early keystream bytes
+7. **Returns**: Pointer to the initialized RC4 state
+
+### **Output:**
+- Returns: `Arcfour *` (pointer to initialized RC4 state structure)
+- The structure contains:
+  - `s[256]`: The shuffled S-box (permutation table)
+  - `i`, `j`, `k`: Internal counters ready for keystream generation
+
+### **Visual Example:**
+If key = "ABC" (ASCII values: 65, 66, 67):
+```
+Before KSA: S-box = [0, 1, 2, 3, ..., 255]
+After KSA:  S-box = [shuffled based on key "ABC"]
+```
+
+### **Important Notes:**
+- **Security**: The whitewashing step is CRITICAL - early RC4 keystream bytes have statistical biases
+- **Performance**: Whitewashing 500M bytes takes time (performance vs security tradeoff)
+- **Stateful**: The returned pointer maintains internal state between encryptions
+
+---
+
+## Function 2: `int8 rc4byte(Arcfour *p)`
+
+### **What This Function Does:**
+This function **generates a single pseudorandom byte** of the RC4 keystream. It's the core of the RC4 algorithm and is called repeatedly to produce the keystream that gets XORed with data.
+
+### **Input Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `p` | `Arcfour *` | Pointer to initialized RC4 state (from rc4init) |
+
+### **What Happens Inside (Step by Step):**
+
+1. **Update i**: `i = (i + 1) % 256`
+   - Increments i, wraps around at 255
+2. **Update j**: `j = (j + S[i]) % 256`
+   - Adds current S[i] to j, wraps around at 255
+3. **Swap**: Exchanges S[i] and S[j] in the S-box
+4. **Calculate index**: `t = (S[i] + S[j]) % 256`
+5. **Output**: Returns S[t] as the keystream byte
+
+### **Output:**
+- Returns: `int8` (single byte, 0-255)
+- This byte is ready to be XORed with plaintext/ciphertext
+- **Side effect**: Modifies the internal state (i, j, and S-box)
+
+### **Visual Example of One Call:**
+```
+Initial state:
+  i = 0, j = 0
+  S-box = [some permutation of 0-255]
+
+Step 1: i = (0 + 1) % 256 = 1
+Step 2: j = (0 + S[1]) % 256  (depends on S[1] value)
+Step 3: Swap S[1] and S[j]
+Step 4: t = (S[1] + S[j]) % 256
+Step 5: Return S[t] as keystream byte
+```
+
+### **Mathematical Properties:**
+- **Deterministic**: Same key → same keystream sequence
+- **Periodic**: Very long period (~2¹⁶⁰) but eventually repeats
+- **Pseudorandom**: Appears random but is deterministic
+
+---
+
+## **How These Functions Work Together:**
+
+### **Setup Phase (rc4init):**
+```c
+// User provides key
+char *key = "MySecretKey";
+int key_len = strlen(key);
+
+// Initialize RC4 state
+Arcfour *rc4_state = rc4init((int8 *)key, key_len);
+// Now rc4_state->s[] contains key-dependent permutation
+```
+
+### **Keystream Generation Phase (rc4byte):**
+```c
+// Each call produces one keystream byte
+int8 keystream_byte1 = rc4byte(rc4_state);  // First byte
+int8 keystream_byte2 = rc4byte(rc4_state);  // Second byte
+int8 keystream_byte3 = rc4byte(rc4_state);  // Third byte
+// ... and so on
+```
+
+### **Encryption/Decryption:**
+```c
+// To encrypt/decrypt data
+for (int i = 0; i < data_length; i++) {
+    int8 keystream = rc4byte(rc4_state);
+    ciphertext[i] = plaintext[i] ^ keystream;  // Encrypt
+    // OR
+    plaintext[i] = ciphertext[i] ^ keystream;  // Decrypt
+}
+```
+
+## **Key Concept: Statefulness**
+
+**RC4 is a stateful cipher:** Each call to `rc4byte` modifies the internal state. This means:
+
+1. **Sequential**: You must generate keystream bytes in order
+2. **Non-repeatable**: Can't jump to position N without generating bytes 0..N-1
+3. **Synchronization**: Encryption and decryption must be in sync (same starting state, same number of bytes generated)
+
+## **Real-World Analogy:**
+
+Think of `rc4init` like **shuffling a deck of 256 cards** based on a password:
+- The deck starts in order (0 to 255)
+- Your password determines how you shuffle it
+- The whitewashing is like cutting the deck multiple times after shuffling
+
+Think of `rc4byte` like **drawing cards from the shuffled deck**:
+- Each draw produces one "random" card (keystream byte)
+- After drawing, you swap two cards in the deck (changing future draws)
+- The next draw will be different because the deck changed
+
+## **Security Implications:**
+
+1. **Never reuse states**: Same key + same position = same keystream
+2. **Whitewashing is essential**: Early bytes have patterns that can leak key information
+3. **Key entropy matters**: Weak keys produce predictable keystreams
+
+## **Common Usage Pattern:**
+
+```c
+// ENCRYPTION SIDE
+Arcfour *encryptor = rc4init(key, key_len);
+int8 *ciphertext = rc4encrypt(encryptor, plaintext, data_len);
+rc4uninit(encryptor);
+
+// DECRYPTION SIDE (must use same key)
+Arcfour *decryptor = rc4init(key, key_len);  // Same key = same initial state
+int8 *decrypted = rc4decrypt(decryptor, ciphertext, data_len);
+rc4uninit(decryptor);
+```
+
+The magic is that `rc4encrypt` calls `rc4byte` repeatedly internally, so you don't usually call `rc4byte` directly unless building custom encryption logic.
