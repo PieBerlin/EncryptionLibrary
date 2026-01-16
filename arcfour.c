@@ -70,7 +70,6 @@ int8 rc4byte(Arcfour *p){
     p->s[p->j]=tmp1;
 
 
-
     //t := (S[i] + S[j]) mod 256
     tmp1=(p->s[p->i] +p->s[p->j]) % 256;
 
